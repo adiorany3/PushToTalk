@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import re
 import sqlite3
@@ -9,64 +10,175 @@ from zoneinfo import ZoneInfo
 import qrcode
 import streamlit as st
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
 
-# =========================
-# KONFIGURASI DASAR
-# =========================
 
-SERVER_URL = "https://pushtotalk.streamlit.app/"
+# =========================================================
+# KONFIGURASI
+# =========================================================
+
+SERVER_URL = "https://pushtotalk.streamlit.app"
 
 BASE_DIR = Path("ptt_data")
-AUDIO_DIR = BASE_DIR / "audio"
 DB_PATH = BASE_DIR / "ptt.sqlite3"
+
 TZ = ZoneInfo("Asia/Jakarta")
 
+MAX_MESSAGES_PER_ROOM = 200
+DEFAULT_ROOM = "umum"
 
-# =========================
-# FUNGSI BANTUAN
-# =========================
 
-def init_storage():
+# =========================================================
+# DATABASE
+# =========================================================
+
+def get_conn():
     BASE_DIR.mkdir(exist_ok=True)
-    AUDIO_DIR.mkdir(exist_ok=True)
 
-    with sqlite3.connect(DB_PATH) as conn:
+    conn = sqlite3.connect(
+        DB_PATH,
+        timeout=10,
+        check_same_thread=False
+    )
+
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+
+    return conn
+
+
+def init_db():
+    with get_conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 room TEXT NOT NULL,
                 sender TEXT NOT NULL,
-                filename TEXT NOT NULL,
-                mime_type TEXT NOT NULL,
-                audio_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
                 note TEXT,
-                UNIQUE(room, audio_hash)
+                mime_type TEXT NOT NULL,
+                audio_blob BLOB NOT NULL,
+                audio_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_room_id
+            ON messages(room, id DESC)
+        """)
+
         conn.commit()
 
 
-def safe_slug(value: str, fallback: str = "umum") -> str:
-    value = (value or "").strip().lower()
+def save_message(room: str, sender: str, note: str, audio_bytes: bytes, mime_type: str):
+    if not audio_bytes:
+        return False, "Audio kosong. Silakan rekam ulang."
+
+    audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+    created_at = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO messages
+            (room, sender, note, mime_type, audio_blob, audio_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            room,
+            sender,
+            note.strip(),
+            mime_type or "audio/wav",
+            sqlite3.Binary(audio_bytes),
+            audio_hash,
+            created_at
+        ))
+
+        # Simpan maksimal beberapa pesan terbaru per room agar database tidak membesar terus.
+        conn.execute("""
+            DELETE FROM messages
+            WHERE room = ?
+            AND id NOT IN (
+                SELECT id FROM messages
+                WHERE room = ?
+                ORDER BY id DESC
+                LIMIT ?
+            )
+        """, (room, room, MAX_MESSAGES_PER_ROOM))
+
+        conn.commit()
+
+    return True, "Pesan suara berhasil dikirim."
+
+
+def get_messages(room: str, limit: int):
+    with get_conn() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT id, room, sender, note, mime_type, audio_blob, created_at
+            FROM messages
+            WHERE room = ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (room, limit)).fetchall()
+
+    return rows
+
+
+def delete_message(message_id: int, room: str):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM messages WHERE id = ? AND room = ?",
+            (message_id, room)
+        )
+        conn.commit()
+
+
+def clear_room(room: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM messages WHERE room = ?", (room,))
+        conn.commit()
+
+
+# =========================================================
+# UTILITAS
+# =========================================================
+
+def safe_slug(value: str, fallback: str = DEFAULT_ROOM) -> str:
+    value = str(value or "").strip().lower()
     value = re.sub(r"[^a-z0-9_-]+", "-", value)
     value = value.strip("-")
     return value[:40] or fallback
 
 
-def clean_name(value: str, fallback: str = "Anonim") -> str:
-    value = (value or "").strip()
+def clean_name(value: str, fallback: str = "User") -> str:
+    value = str(value or "").strip()
     value = re.sub(r"[<>]", "", value)
     return value[:30] or fallback
 
 
-def now_jakarta() -> str:
-    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+def get_query_room() -> str:
+    try:
+        value = st.query_params.get("room", DEFAULT_ROOM)
+        if isinstance(value, list):
+            value = value[0] if value else DEFAULT_ROOM
+        return safe_slug(value)
+    except Exception:
+        return DEFAULT_ROOM
+
+
+def set_query_room(room: str):
+    try:
+        if st.query_params.get("room") != room:
+            st.query_params["room"] = room
+    except Exception:
+        pass
 
 
 def make_room_url(room: str) -> str:
-    base_url = SERVER_URL.rstrip("/")
-    return f"{base_url}/?room={room}"
+    return f"{SERVER_URL.rstrip('/')}/?room={room}"
 
 
 def make_qr_png(data: str) -> bytes:
@@ -84,69 +196,36 @@ def make_qr_png(data: str) -> bytes:
     return buffer.getvalue()
 
 
-def save_message(room: str, sender: str, audio_bytes: bytes, mime_type: str, note: str = ""):
-    audio_hash = hashlib.sha256(audio_bytes).hexdigest()
-    timestamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
-    filename = f"{room}_{timestamp}_{audio_hash[:12]}.wav"
-    audio_path = AUDIO_DIR / filename
+def copy_button_html(text: str, label: str = "Salin Link"):
+    safe_text = text.replace("\\", "\\\\").replace("`", "\\`")
 
-    audio_path.write_bytes(audio_bytes)
-
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("""
-                INSERT INTO messages
-                (room, sender, filename, mime_type, audio_hash, created_at, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                room,
-                sender,
-                filename,
-                mime_type or "audio/wav",
-                audio_hash,
-                now_jakarta(),
-                note.strip()
-            ))
-            conn.commit()
-
-        return True, "Pesan suara berhasil dikirim."
-
-    except sqlite3.IntegrityError:
-        if audio_path.exists():
-            audio_path.unlink()
-        return False, "Pesan ini sudah pernah dikirim."
+    st.components.v1.html(
+        f"""
+        <button
+            onclick="navigator.clipboard.writeText(`{safe_text}`).then(() => {{
+                this.innerText='Link Disalin';
+                setTimeout(() => this.innerText='{label}', 1200);
+            }})"
+            style="
+                width:100%;
+                padding:0.65rem 0.75rem;
+                border-radius:0.5rem;
+                border:1px solid #ddd;
+                background:#fff;
+                cursor:pointer;
+                font-size:0.95rem;
+            "
+        >
+            {label}
+        </button>
+        """,
+        height=48
+    )
 
 
-def get_messages(room: str, limit: int = 30):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT id, sender, filename, mime_type, created_at, note
-            FROM messages
-            WHERE room = ?
-            ORDER BY id DESC
-            LIMIT ?
-        """, (room, limit)).fetchall()
-
-    return rows
-
-
-def clear_room(room: str):
-    rows = get_messages(room, limit=10_000)
-
-    for row in rows:
-        audio_path = AUDIO_DIR / row["filename"]
-        if audio_path.exists():
-            audio_path.unlink()
-
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("DELETE FROM messages WHERE room = ?", (room,))
-        conn.commit()
-
-
-# =========================
-# APP STREAMLIT
-# =========================
+# =========================================================
+# APP
+# =========================================================
 
 st.set_page_config(
     page_title="PTT Sederhana",
@@ -154,13 +233,12 @@ st.set_page_config(
     layout="centered"
 )
 
-init_storage()
+init_db()
 
-query_room = st.query_params.get("room", "umum")
-default_room = safe_slug(query_room, fallback="umum")
+default_room = get_query_room()
 
-st.title("🎙️ PTT Sederhana")
-st.caption("Push-to-talk sederhana berbasis voice message. Tidak real-time, tetapi stabil dan mudah dipakai.")
+st.title("🎙️ Push To Talk Sederhana")
+st.caption("Versi stabil: rekam suara, kirim, lalu pengguna lain menerima setelah refresh/auto-refresh.")
 
 with st.sidebar:
     st.header("Pengaturan")
@@ -170,26 +248,39 @@ with st.sidebar:
     )
 
     room_input = st.text_input("Channel / Room", value=default_room)
-    room = safe_slug(room_input, fallback="umum")
+    room = safe_slug(room_input)
 
-    if st.query_params.get("room") != room:
-        st.query_params["room"] = room
+    set_query_room(room)
 
     room_url = make_room_url(room)
 
     limit = st.slider(
-        "Jumlah pesan ditampilkan",
+        "Jumlah pesan tampil",
         min_value=5,
         max_value=100,
         value=30,
         step=5
     )
 
+    auto_refresh = st.toggle(
+        "Auto-refresh pesan",
+        value=True,
+        help="Aktifkan agar pesan baru muncul otomatis."
+    )
+
+    refresh_seconds = st.selectbox(
+        "Interval auto-refresh",
+        options=[3, 5, 10, 15, 30],
+        index=1,
+        disabled=not auto_refresh
+    )
+
     st.divider()
 
     st.subheader("Bagikan Room")
-    st.write("Link room:")
     st.code(room_url, language="text")
+
+    copy_button_html(room_url)
 
     st.link_button(
         "Buka Room Ini",
@@ -197,69 +288,87 @@ with st.sidebar:
         use_container_width=True
     )
 
-    qr_png = make_qr_png(room_url)
-    st.image(qr_png, caption="Scan QR untuk masuk ke room ini")
-
-    st.caption("Gunakan link atau QR yang sama agar beberapa pengguna masuk ke channel yang sama.")
+    st.image(
+        make_qr_png(room_url),
+        caption="Scan QR untuk masuk ke room ini",
+        use_container_width=True
+    )
 
     st.divider()
 
-    if st.checkbox("Tampilkan tombol hapus room"):
-        if st.button("Hapus semua pesan di room ini", type="secondary"):
+    with st.expander("Admin room"):
+        st.warning("Tombol ini menghapus semua pesan pada room aktif.")
+        if st.button("Hapus Semua Pesan Room Ini", type="secondary", use_container_width=True):
             clear_room(room)
-            st.success("Semua pesan di room ini sudah dihapus.")
+            st.success("Semua pesan pada room ini sudah dihapus.")
             st.rerun()
 
+
+if auto_refresh and st_autorefresh is not None:
+    st_autorefresh(
+        interval=refresh_seconds * 1000,
+        key=f"ptt_refresh_{room}"
+    )
+elif auto_refresh and st_autorefresh is None:
+    st.warning(
+        "Auto-refresh belum aktif karena package streamlit-autorefresh belum terpasang. "
+        "Pastikan requirements.txt sudah di-update."
+    )
 
 st.subheader(f"Channel: #{room}")
 
 st.info(
-    "Cara pakai: rekam suara, berhenti rekam, lalu klik tombol kirim. "
-    "Pengguna lain dapat menekan tombol refresh untuk melihat pesan terbaru."
+    "Tekan tombol rekam, bicara, berhenti rekam, lalu klik **Kirim Pesan Suara**. "
+    "Ini bukan voice call real-time, tetapi voice message sederhana."
 )
 
-note = st.text_input(
-    "Catatan singkat opsional",
-    placeholder="Contoh: untuk tim umum, urgent, info lapangan..."
-)
+with st.form("send_voice_message", clear_on_submit=True):
+    note = st.text_input(
+        "Catatan opsional",
+        placeholder="Contoh: info lapangan, urgent, koordinasi..."
+    )
 
-audio_file = st.audio_input(
-    "Tekan untuk rekam pesan suara",
-    sample_rate=16000
-)
+    audio_file = st.audio_input(
+        "Rekam pesan suara",
+        sample_rate=16000
+    )
 
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    send_clicked = st.button(
+    submitted = st.form_submit_button(
         "Kirim Pesan Suara",
         type="primary",
-        disabled=audio_file is None,
         use_container_width=True
     )
 
-with col2:
-    if st.button("Refresh Pesan", use_container_width=True):
-        st.rerun()
-
-if send_clicked and audio_file is not None:
-    audio_bytes = audio_file.getvalue()
-    mime_type = getattr(audio_file, "type", "audio/wav")
-
-    ok, message = save_message(
-        room=room,
-        sender=sender,
-        audio_bytes=audio_bytes,
-        mime_type=mime_type,
-        note=note
-    )
-
-    if ok:
-        st.success(message)
-        st.rerun()
+if submitted:
+    if audio_file is None:
+        st.warning("Belum ada rekaman. Silakan rekam suara terlebih dahulu.")
     else:
-        st.warning(message)
+        audio_bytes = audio_file.getvalue()
+        mime_type = getattr(audio_file, "type", None) or "audio/wav"
 
+        ok, message = save_message(
+            room=room,
+            sender=sender,
+            note=note,
+            audio_bytes=audio_bytes,
+            mime_type=mime_type
+        )
+
+        if ok:
+            st.success(message)
+            st.rerun()
+        else:
+            st.error(message)
+
+
+col_a, col_b = st.columns([1, 1])
+
+with col_a:
+    if st.button("Refresh Sekarang", use_container_width=True):
+        st.rerun()
+
+with col_b:
+    st.write(f"Room aktif: `{room}`")
 
 st.divider()
 st.subheader("Pesan Terbaru")
@@ -270,19 +379,33 @@ if not messages:
     st.write("Belum ada pesan di channel ini.")
 else:
     for msg in messages:
-        audio_path = AUDIO_DIR / msg["filename"]
-
         with st.container(border=True):
-            st.markdown(f"**{msg['sender']}**")
-            st.caption(msg["created_at"])
+            top_left, top_right = st.columns([4, 1])
+
+            with top_left:
+                st.markdown(f"**{msg['sender']}**")
+                st.caption(msg["created_at"])
+
+            with top_right:
+                delete_clicked = st.button(
+                    "Hapus",
+                    key=f"delete_{msg['id']}",
+                    use_container_width=True
+                )
+
+            if delete_clicked:
+                delete_message(msg["id"], room)
+                st.rerun()
 
             if msg["note"]:
                 st.write(msg["note"])
 
-            if audio_path.exists():
-                st.audio(
-                    audio_path.read_bytes(),
-                    format=msg["mime_type"] or "audio/wav"
-                )
-            else:
-                st.warning("File audio tidak ditemukan.")
+            st.audio(
+                bytes(msg["audio_blob"]),
+                format=msg["mime_type"] or "audio/wav"
+            )
+
+st.caption(
+    "Catatan: pada Streamlit Community Cloud, penyimpanan lokal bisa reset saat aplikasi restart/redeploy. "
+    "Untuk produksi permanen, gunakan database/storage eksternal."
+)
