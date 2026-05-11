@@ -1,4 +1,5 @@
 import hashlib
+import os
 import re
 import sqlite3
 import time
@@ -29,7 +30,30 @@ DB_PATH = BASE_DIR / "ptt.sqlite3"
 TZ = ZoneInfo("Asia/Jakarta")
 
 MAX_MESSAGES_PER_ROOM = 200
+
+ROOMS = {
+    "umum": "Room 1 - Umum",
+    "lapangan": "Room 2 - Lapangan",
+    "tim-1": "Room 3 - Tim 1",
+    "tim-2": "Room 4 - Tim 2",
+    "darurat": "Room 5 - Darurat",
+}
+
 DEFAULT_ROOM = "umum"
+
+# Password admin:
+# Prioritas:
+# 1. Streamlit Secrets: ADMIN_PASSWORD
+# 2. Environment variable: ADMIN_PASSWORD
+# 3. Default bawaan: admin12345
+def get_admin_password() -> str:
+    try:
+        if "ADMIN_PASSWORD" in st.secrets:
+            return str(st.secrets["ADMIN_PASSWORD"])
+    except Exception:
+        pass
+
+    return os.getenv("ADMIN_PASSWORD", "admin12345")
 
 
 # =========================================================
@@ -68,8 +92,6 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
 
-    # WAL bisa gagal pada beberapa environment read-only/tertentu,
-    # jadi jangan biarkan app crash hanya karena PRAGMA.
     try:
         conn.execute("PRAGMA journal_mode=WAL")
     except sqlite3.OperationalError:
@@ -107,14 +129,6 @@ def reset_messages_table(conn):
 
 
 def migrate_old_file_schema_to_blob(conn, old_columns: set):
-    """
-    Migrasi dari versi lama:
-    - kolom lama: filename
-    - audio tersimpan di ptt_data/audio/
-    - kolom baru: audio_blob
-
-    Jika file audio lama tidak ditemukan, pesannya dilewati.
-    """
     conn.execute("DROP TABLE IF EXISTS messages_new")
     conn.execute("""
         CREATE TABLE messages_new (
@@ -138,7 +152,9 @@ def migrate_old_file_schema_to_blob(conn, old_columns: set):
             """).fetchall()
 
             for row in old_rows:
+                old_room = safe_room(row["room"] or DEFAULT_ROOM)
                 audio_path = AUDIO_DIR / str(row["filename"])
+
                 if not audio_path.exists():
                     continue
 
@@ -153,7 +169,7 @@ def migrate_old_file_schema_to_blob(conn, old_columns: set):
                     (room, sender, note, mime_type, audio_blob, audio_hash, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    row["room"] or DEFAULT_ROOM,
+                    old_room,
                     row["sender"] or "User",
                     row["note"] or "",
                     row["mime_type"] or "audio/wav",
@@ -162,7 +178,6 @@ def migrate_old_file_schema_to_blob(conn, old_columns: set):
                     row["created_at"] or datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
                 ))
         except Exception:
-            # Kalau migrasi data lama gagal, tetap lanjut dengan tabel kosong.
             pass
 
     conn.execute("DROP TABLE IF EXISTS messages")
@@ -191,18 +206,15 @@ def init_db():
             "created_at",
         }
 
-        # Jika sudah sesuai, cukup pastikan index ada.
         if required.issubset(columns):
             conn.execute(CREATE_INDEX_SQL)
             conn.commit()
             return
 
-        # Jika masih schema lama berbasis filename, migrasi otomatis.
         if "filename" in columns and "audio_blob" not in columns:
             migrate_old_file_schema_to_blob(conn, columns)
             return
 
-        # Jika schema rusak/tidak dikenal, buat ulang agar app tidak crash.
         reset_messages_table(conn)
 
 
@@ -229,6 +241,7 @@ def save_message(room: str, sender: str, note: str, audio_bytes: bytes, mime_typ
     if not audio_bytes:
         return False, "Audio kosong. Silakan rekam ulang."
 
+    room = safe_room(room)
     audio_hash = hashlib.sha256(audio_bytes).hexdigest()
     created_at = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -266,6 +279,8 @@ def save_message(room: str, sender: str, note: str, audio_bytes: bytes, mime_typ
 
 
 def get_messages(room: str, limit: int):
+    room = safe_room(room)
+
     def action():
         with get_conn() as conn:
             return conn.execute("""
@@ -278,8 +293,7 @@ def get_messages(room: str, limit: int):
 
     try:
         return execute_with_retry(action)
-    except sqlite3.OperationalError as exc:
-        # Recovery otomatis jika database dari versi lama/korup masih menyebabkan error.
+    except sqlite3.OperationalError:
         with get_conn() as conn:
             columns = get_columns(conn, "messages")
             if "filename" in columns and "audio_blob" not in columns:
@@ -295,6 +309,8 @@ def get_messages(room: str, limit: int):
 
 
 def delete_message(message_id: int, room: str):
+    room = safe_room(room)
+
     def action():
         with get_conn() as conn:
             conn.execute(
@@ -307,9 +323,20 @@ def delete_message(message_id: int, room: str):
 
 
 def clear_room(room: str):
+    room = safe_room(room)
+
     def action():
         with get_conn() as conn:
             conn.execute("DELETE FROM messages WHERE room = ?", (room,))
+            conn.commit()
+
+    execute_with_retry(action)
+
+
+def clear_all_rooms():
+    def action():
+        with get_conn() as conn:
+            conn.execute("DELETE FROM messages")
             conn.commit()
 
     execute_with_retry(action)
@@ -326,6 +353,13 @@ def safe_slug(value: str, fallback: str = DEFAULT_ROOM) -> str:
     return value[:40] or fallback
 
 
+def safe_room(value: str) -> str:
+    room = safe_slug(value, fallback=DEFAULT_ROOM)
+    if room not in ROOMS:
+        return DEFAULT_ROOM
+    return room
+
+
 def clean_name(value: str, fallback: str = "User") -> str:
     value = str(value or "").strip()
     value = re.sub(r"[<>]", "", value)
@@ -337,12 +371,13 @@ def get_query_room() -> str:
         value = st.query_params.get("room", DEFAULT_ROOM)
         if isinstance(value, list):
             value = value[0] if value else DEFAULT_ROOM
-        return safe_slug(value)
+        return safe_room(value)
     except Exception:
         return DEFAULT_ROOM
 
 
 def set_query_room(room: str):
+    room = safe_room(room)
     try:
         if st.query_params.get("room") != room:
             st.query_params["room"] = room
@@ -351,6 +386,7 @@ def set_query_room(room: str):
 
 
 def make_room_url(room: str) -> str:
+    room = safe_room(room)
     return f"{SERVER_URL.rstrip('/')}/?room={room}"
 
 
@@ -396,6 +432,14 @@ def copy_button_html(text: str, label: str = "Salin Link"):
     )
 
 
+def is_admin_authenticated() -> bool:
+    return bool(st.session_state.get("admin_authenticated", False))
+
+
+def check_admin_password(input_password: str) -> bool:
+    return input_password == get_admin_password()
+
+
 # =========================================================
 # APP
 # =========================================================
@@ -420,9 +464,17 @@ with st.sidebar:
         st.text_input("Nama pengguna", value="User")
     )
 
-    room_input = st.text_input("Channel / Room", value=default_room)
-    room = safe_slug(room_input)
+    room_keys = list(ROOMS.keys())
+    default_index = room_keys.index(default_room) if default_room in room_keys else 0
 
+    selected_room = st.selectbox(
+        "Pilih Room",
+        options=room_keys,
+        index=default_index,
+        format_func=lambda key: ROOMS[key]
+    )
+
+    room = safe_room(selected_room)
     set_query_room(room)
 
     room_url = make_room_url(room)
@@ -450,6 +502,12 @@ with st.sidebar:
 
     st.divider()
 
+    st.subheader("Daftar 5 Room")
+    for key, label in ROOMS.items():
+        st.write(f"- `{key}` — {label}")
+
+    st.divider()
+
     st.subheader("Bagikan Room")
     st.code(room_url, language="text")
 
@@ -470,11 +528,40 @@ with st.sidebar:
     st.divider()
 
     with st.expander("Admin room"):
-        st.warning("Tombol ini menghapus semua pesan pada room aktif.")
-        if st.button("Hapus Semua Pesan Room Ini", type="secondary", use_container_width=True):
-            clear_room(room)
-            st.success("Semua pesan pada room ini sudah dihapus.")
-            st.rerun()
+        if not is_admin_authenticated():
+            admin_password_input = st.text_input(
+                "Password admin",
+                type="password",
+                placeholder="Masukkan password admin"
+            )
+
+            if st.button("Masuk Admin", use_container_width=True):
+                if check_admin_password(admin_password_input):
+                    st.session_state["admin_authenticated"] = True
+                    st.success("Admin berhasil masuk.")
+                    st.rerun()
+                else:
+                    st.error("Password admin salah.")
+        else:
+            st.success("Mode admin aktif.")
+
+            if st.button("Keluar Admin", use_container_width=True):
+                st.session_state["admin_authenticated"] = False
+                st.rerun()
+
+            st.warning("Area ini dapat menghapus pesan.")
+
+            if st.button("Hapus Semua Pesan Room Ini", type="secondary", use_container_width=True):
+                clear_room(room)
+                st.success(f"Semua pesan pada {ROOMS[room]} sudah dihapus.")
+                st.rerun()
+
+            confirm_all = st.checkbox("Saya paham: hapus semua pesan di semua room")
+            if confirm_all:
+                if st.button("Hapus Semua Pesan Semua Room", type="secondary", use_container_width=True):
+                    clear_all_rooms()
+                    st.success("Semua pesan di semua room sudah dihapus.")
+                    st.rerun()
 
 
 if auto_refresh and st_autorefresh is not None:
@@ -488,7 +575,8 @@ elif auto_refresh and st_autorefresh is None:
         "Pastikan requirements.txt sudah di-update."
     )
 
-st.subheader(f"Channel: #{room}")
+st.subheader(f"{ROOMS[room]}")
+st.caption(f"Kode room: `{room}`")
 
 st.info(
     "Tekan tombol rekam, bicara, berhenti rekam, lalu klik **Kirim Pesan Suara**. "
@@ -549,7 +637,7 @@ st.subheader("Pesan Terbaru")
 messages = get_messages(room, limit=limit)
 
 if not messages:
-    st.write("Belum ada pesan di channel ini.")
+    st.write("Belum ada pesan di room ini.")
 else:
     for msg in messages:
         with st.container(border=True):
@@ -560,15 +648,16 @@ else:
                 st.caption(msg["created_at"])
 
             with top_right:
-                delete_clicked = st.button(
-                    "Hapus",
-                    key=f"delete_{msg['id']}",
-                    use_container_width=True
-                )
+                if is_admin_authenticated():
+                    delete_clicked = st.button(
+                        "Hapus",
+                        key=f"delete_{msg['id']}",
+                        use_container_width=True
+                    )
 
-            if delete_clicked:
-                delete_message(msg["id"], room)
-                st.rerun()
+                    if delete_clicked:
+                        delete_message(msg["id"], room)
+                        st.rerun()
 
             if msg["note"]:
                 st.write(msg["note"])
