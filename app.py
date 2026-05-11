@@ -31,8 +31,11 @@ DB_PATH = BASE_DIR / "ptt.sqlite3"
 
 TZ = ZoneInfo("Asia/Jakarta")
 
-# HANYA SIMPAN 5 PESAN TERBARU PER ROOM
-MAX_MESSAGES_PER_ROOM = 5
+# RETENSI PESAN
+# Room publik menyimpan 5 pesan terbaru.
+# Secret room menyimpan 20 pesan terbaru.
+PUBLIC_MAX_MESSAGES_PER_ROOM = 5
+SECRET_MAX_MESSAGES_PER_ROOM = 20
 
 PUBLIC_ROOMS = {
     "umum": "Room 1 - Umum",
