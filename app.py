@@ -1200,6 +1200,7 @@ with col_a:
 
 with col_b:
     st.write(f"Room aktif: `{room}`")
+    st.caption(f"Nama otomatis Anda: `{sender}`")
 
 st.divider()
 st.subheader(f"Pesan Terbaru Maksimal {MAX_MESSAGES_PER_ROOM}")
