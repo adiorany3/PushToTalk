@@ -43,6 +43,13 @@ PUBLIC_ROOMS = {
 }
 DEFAULT_ROOM = "umum"
 
+ADMIN_USERNAME = "adioranye"
+ADMIN_OWNER_NAME = "Galuh Adi Insani"
+RESERVED_ADMIN_NAMES = {
+    ADMIN_USERNAME.lower(),
+    ADMIN_OWNER_NAME.lower(),
+}
+
 
 def get_admin_password() -> str:
     """
@@ -80,6 +87,20 @@ def clean_name(value: str, fallback: str = "User") -> str:
     value = str(value or "").strip()
     value = re.sub(r"[<>]", "", value)
     return value[:30] or fallback
+
+
+def is_reserved_admin_name(value: str) -> bool:
+    return str(value or "").strip().lower() in RESERVED_ADMIN_NAMES
+
+
+def display_sender_name(sender: str) -> str:
+    sender = clean_name(sender)
+
+    # Identitas asli admin hanya ditampilkan ketika mode admin aktif.
+    if is_reserved_admin_name(sender) and not is_admin_authenticated():
+        return "Admin"
+
+    return sender
 
 
 def now_jakarta() -> str:
@@ -559,6 +580,9 @@ def get_room_label(slug: str) -> str:
 # =========================================================
 def save_message(room: str, sender: str, note: str, audio_bytes: bytes, mime_type: str):
     room = safe_slug(room)
+    sender = ADMIN_USERNAME if is_admin_authenticated() else clean_name(sender)
+    if not is_admin_authenticated() and is_reserved_admin_name(sender):
+        sender = create_unique_auto_username()
 
     if not is_valid_room(room):
         return False, "Room tidak ditemukan. Pastikan nama secret room benar."
@@ -719,7 +743,7 @@ def create_unique_auto_username() -> str:
                     (candidate,),
                 ).fetchone()
 
-                if row_auto is None and row_message is None:
+                if row_auto is None and row_message is None and not is_reserved_admin_name(candidate):
                     conn.execute(
                         "INSERT INTO auto_users (alias, created_at) VALUES (?, ?)",
                         (candidate, now_jakarta()),
@@ -740,12 +764,16 @@ def create_unique_auto_username() -> str:
 
 def get_sender_name_from_input(raw_name: str) -> str:
     """
-    Jika nama dikosongkan, sistem memberi nama otomatis unik.
+    Jika admin login, nama pengirim otomatis menjadi adioranye.
+    Jika nama dikosongkan atau memakai nama khusus admin, sistem memberi nama otomatis unik.
     Nama otomatis disimpan di session_state agar tidak berubah saat refresh.
     """
+    if is_admin_authenticated():
+        return ADMIN_USERNAME
+
     raw_name = str(raw_name or "").strip()
 
-    if raw_name:
+    if raw_name and not is_reserved_admin_name(raw_name):
         return clean_name(raw_name)
 
     if "auto_username" not in st.session_state:
@@ -838,15 +866,22 @@ st.caption("Rekam suara, kirim, lalu pengguna lain menerima setelah refresh/auto
 with st.sidebar:
     st.header("Pengaturan")
 
-    sender_input = st.text_input(
-        "Nama pengguna",
-        value="",
-        placeholder="Kosongkan untuk nama otomatis unik",
-    )
-    sender = get_sender_name_from_input(sender_input)
+    if is_admin_authenticated():
+        sender_input = ""
+        sender = ADMIN_USERNAME
+        st.caption(f"Nama admin otomatis: `{sender}`")
+    else:
+        sender_input = st.text_input(
+            "Nama pengguna",
+            value="",
+            placeholder="Kosongkan untuk nama otomatis unik",
+        )
+        sender = get_sender_name_from_input(sender_input)
 
-    if not sender_input.strip():
-        st.caption(f"Nama otomatis Anda: `{sender}`")
+        if is_reserved_admin_name(sender_input):
+            st.warning("Nama tersebut khusus admin. Sistem memakai nama otomatis.")
+        elif not sender_input.strip():
+            st.caption(f"Nama otomatis Anda: `{sender}`")
 
     st.divider()
     st.subheader("Masuk Room")
@@ -953,14 +988,18 @@ with st.sidebar:
             if st.button("Masuk Admin", use_container_width=True):
                 if check_admin_password(admin_password_input):
                     st.session_state["admin_authenticated"] = True
+                    st.session_state["admin_sender"] = ADMIN_USERNAME
                     st.success("Admin berhasil masuk.")
                     st.rerun()
                 else:
                     st.error("Password admin salah.")
         else:
             st.success("Mode admin aktif.")
+            st.caption(f"Login sebagai: `{ADMIN_USERNAME}`")
+            st.caption(f"Pemilik/admin: {ADMIN_OWNER_NAME}")
             if st.button("Keluar Admin", use_container_width=True):
                 st.session_state["admin_authenticated"] = False
+                st.session_state.pop("admin_sender", None)
                 st.rerun()
 
             st.divider()
@@ -1145,7 +1184,10 @@ with col_a:
         st.rerun()
 with col_b:
     st.write(f"Room aktif: `{room}`")
-    st.caption(f"Nama otomatis Anda: `{sender}`")
+    if is_admin_authenticated():
+        st.caption(f"Nama admin: `{sender}`")
+    else:
+        st.caption(f"Nama Anda: `{sender}`")
 
 st.divider()
 st.subheader(f"Pesan Terbaru Maksimal {active_room_message_limit}")
@@ -1159,7 +1201,7 @@ else:
         with st.container(border=True):
             top_left, top_right = st.columns([4, 1])
             with top_left:
-                st.markdown(f"**{msg['sender']}**")
+                st.markdown(f"**{display_sender_name(msg['sender'])}**")
                 st.caption(msg["created_at"])
             with top_right:
                 if is_admin_authenticated():
@@ -1177,7 +1219,11 @@ else:
 
             st.audio(bytes(msg["audio_blob"]), format=msg["mime_type"] or "audio/wav")
 
-st.caption(
+footer_text = (
     "Catatan: Room umum dapat dilihat dan didengar pesannya oleh siapapun yang masuk, "
-    "jika membutuhkan link private silahkan hubungi admin. Created by : Galuh Adi Insani"
+    "jika membutuhkan link private silahkan hubungi admin."
 )
+if is_admin_authenticated():
+    footer_text += f" Created by: {ADMIN_OWNER_NAME}"
+
+st.caption(footer_text)
