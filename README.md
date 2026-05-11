@@ -6,20 +6,28 @@ Server:
 https://pushtotalk.streamlit.app/
 ```
 
-Aplikasi ini adalah PTT sederhana berbasis voice message.
+## Fix Pada Versi Ini
 
-## Yang Diperbaiki
+Versi ini memperbaiki error:
 
-Versi ini lebih stabil dibanding versi sebelumnya karena:
+```text
+sqlite3.OperationalError
+SELECT id, room, sender, note, mime_type, audio_blob, created_at
+```
 
-1. Audio disimpan langsung ke SQLite sebagai BLOB.
-2. Tidak memakai folder audio terpisah, sehingga tidak ada masalah file audio hilang/tidak terbaca.
-3. SQLite memakai WAL mode dan busy timeout agar lebih aman untuk beberapa pengguna sederhana.
-4. Ada auto-refresh pesan.
-5. Link room memakai server:
+Penyebab umumnya adalah database lama masih memakai struktur tabel versi sebelumnya, yaitu audio disimpan sebagai file dengan kolom `filename`, sedangkan versi baru membaca kolom `audio_blob`.
+
+Versi ini sudah menambahkan:
+
+1. Migrasi otomatis dari schema lama ke schema baru.
+2. Recovery otomatis kalau tabel `messages` rusak/tidak sesuai.
+3. Retry sederhana jika SQLite sedang locked/busy.
+4. SQLite timeout lebih panjang.
+5. Audio disimpan sebagai BLOB di SQLite.
+6. Auto-refresh pesan.
+7. QR Code room.
+8. Link room memakai:
    `https://pushtotalk.streamlit.app/?room=umum`
-6. Ada QR Code untuk akses dari HP.
-7. Database dibatasi maksimal 200 pesan per room agar tidak cepat membesar.
 
 ## File
 
@@ -30,13 +38,24 @@ Versi ini lebih stabil dibanding versi sebelumnya karena:
 
 ## Cara Deploy
 
-Upload semua file ke GitHub, lalu deploy ke Streamlit Community Cloud.
+Upload semua file ke GitHub, lalu redeploy Streamlit Cloud.
 
 Main file:
 
 ```text
 app.py
 ```
+
+## Jika Error Masih Muncul
+
+Di Streamlit Cloud:
+
+1. Klik **Manage app**.
+2. Klik **Reboot app**.
+3. Jika masih error, redeploy dari commit terbaru.
+4. Jika tetap error karena database lokal lama terkunci, hapus folder `ptt_data` dari repository jika pernah ikut ter-upload.
+
+Folder `ptt_data` tidak perlu di-upload ke GitHub.
 
 ## Contoh Link Room
 
@@ -51,18 +70,3 @@ https://pushtotalk.streamlit.app/?room=lapangan
 ```text
 https://pushtotalk.streamlit.app/?room=tim-1
 ```
-
-## Cara Pakai
-
-1. Buka aplikasi.
-2. Isi nama pengguna.
-3. Pilih room/channel.
-4. Rekam suara.
-5. Klik Kirim Pesan Suara.
-6. Pengguna lain pada room yang sama akan melihat pesan setelah refresh/auto-refresh.
-
-## Catatan Penting
-
-Aplikasi ini cocok untuk demo, prototipe, dan pemakaian ringan.
-
-Pada Streamlit Community Cloud, penyimpanan lokal dapat hilang ketika aplikasi restart atau redeploy. Untuk penggunaan serius/jangka panjang, gunakan database eksternal seperti Supabase, Firebase, PostgreSQL, atau object storage.

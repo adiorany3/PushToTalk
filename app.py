@@ -1,7 +1,7 @@
-import base64
 import hashlib
 import re
 import sqlite3
+import time
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
@@ -23,6 +23,7 @@ except Exception:
 SERVER_URL = "https://pushtotalk.streamlit.app"
 
 BASE_DIR = Path("ptt_data")
+AUDIO_DIR = BASE_DIR / "audio"  # hanya dipakai untuk migrasi dari versi lama
 DB_PATH = BASE_DIR / "ptt.sqlite3"
 
 TZ = ZoneInfo("Asia/Jakarta")
@@ -35,43 +36,193 @@ DEFAULT_ROOM = "umum"
 # DATABASE
 # =========================================================
 
+CREATE_MESSAGES_SQL = """
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    note TEXT,
+    mime_type TEXT NOT NULL,
+    audio_blob BLOB NOT NULL,
+    audio_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+
+CREATE_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_messages_room_id
+ON messages(room, id DESC)
+"""
+
+
 def get_conn():
     BASE_DIR.mkdir(exist_ok=True)
+    AUDIO_DIR.mkdir(exist_ok=True)
 
     conn = sqlite3.connect(
         DB_PATH,
-        timeout=10,
+        timeout=30,
         check_same_thread=False
     )
 
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=10000")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
+
+    # WAL bisa gagal pada beberapa environment read-only/tertentu,
+    # jadi jangan biarkan app crash hanya karena PRAGMA.
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass
 
     return conn
 
 
+def table_exists(conn, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,)
+    ).fetchone()
+    return row is not None
+
+
+def get_columns(conn, table_name: str) -> set:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {row["name"] for row in rows}
+    except Exception:
+        return set()
+
+
+def reset_messages_table(conn):
+    conn.execute("DROP TABLE IF EXISTS messages")
+    conn.execute(CREATE_MESSAGES_SQL)
+    conn.execute(CREATE_INDEX_SQL)
+    conn.commit()
+
+
+def migrate_old_file_schema_to_blob(conn, old_columns: set):
+    """
+    Migrasi dari versi lama:
+    - kolom lama: filename
+    - audio tersimpan di ptt_data/audio/
+    - kolom baru: audio_blob
+
+    Jika file audio lama tidak ditemukan, pesannya dilewati.
+    """
+    conn.execute("DROP TABLE IF EXISTS messages_new")
+    conn.execute("""
+        CREATE TABLE messages_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            note TEXT,
+            mime_type TEXT NOT NULL,
+            audio_blob BLOB NOT NULL,
+            audio_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    if "filename" in old_columns:
+        try:
+            old_rows = conn.execute("""
+                SELECT room, sender, filename, mime_type, audio_hash, created_at, note
+                FROM messages
+                ORDER BY id ASC
+            """).fetchall()
+
+            for row in old_rows:
+                audio_path = AUDIO_DIR / str(row["filename"])
+                if not audio_path.exists():
+                    continue
+
+                audio_bytes = audio_path.read_bytes()
+                if not audio_bytes:
+                    continue
+
+                audio_hash = row["audio_hash"] or hashlib.sha256(audio_bytes).hexdigest()
+
+                conn.execute("""
+                    INSERT INTO messages_new
+                    (room, sender, note, mime_type, audio_blob, audio_hash, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    row["room"] or DEFAULT_ROOM,
+                    row["sender"] or "User",
+                    row["note"] or "",
+                    row["mime_type"] or "audio/wav",
+                    sqlite3.Binary(audio_bytes),
+                    audio_hash,
+                    row["created_at"] or datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+                ))
+        except Exception:
+            # Kalau migrasi data lama gagal, tetap lanjut dengan tabel kosong.
+            pass
+
+    conn.execute("DROP TABLE IF EXISTS messages")
+    conn.execute("ALTER TABLE messages_new RENAME TO messages")
+    conn.execute(CREATE_INDEX_SQL)
+    conn.commit()
+
+
 def init_db():
     with get_conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                room TEXT NOT NULL,
-                sender TEXT NOT NULL,
-                note TEXT,
-                mime_type TEXT NOT NULL,
-                audio_blob BLOB NOT NULL,
-                audio_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
+        if not table_exists(conn, "messages"):
+            conn.execute(CREATE_MESSAGES_SQL)
+            conn.execute(CREATE_INDEX_SQL)
+            conn.commit()
+            return
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_messages_room_id
-            ON messages(room, id DESC)
-        """)
+        columns = get_columns(conn, "messages")
+        required = {
+            "id",
+            "room",
+            "sender",
+            "note",
+            "mime_type",
+            "audio_blob",
+            "audio_hash",
+            "created_at",
+        }
 
-        conn.commit()
+        # Jika sudah sesuai, cukup pastikan index ada.
+        if required.issubset(columns):
+            conn.execute(CREATE_INDEX_SQL)
+            conn.commit()
+            return
+
+        # Jika masih schema lama berbasis filename, migrasi otomatis.
+        if "filename" in columns and "audio_blob" not in columns:
+            migrate_old_file_schema_to_blob(conn, columns)
+            return
+
+        # Jika schema rusak/tidak dikenal, buat ulang agar app tidak crash.
+        reset_messages_table(conn)
+
+
+def execute_with_retry(action, retries: int = 3, delay: float = 0.4):
+    last_error = None
+
+    for _ in range(retries):
+        try:
+            return action()
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            msg = str(exc).lower()
+
+            if "locked" in msg or "busy" in msg:
+                time.sleep(delay)
+                continue
+
+            raise
+
+    raise last_error
 
 
 def save_message(room: str, sender: str, note: str, audio_bytes: bytes, mime_type: str):
@@ -81,65 +232,87 @@ def save_message(room: str, sender: str, note: str, audio_bytes: bytes, mime_typ
     audio_hash = hashlib.sha256(audio_bytes).hexdigest()
     created_at = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-    with get_conn() as conn:
-        conn.execute("""
-            INSERT INTO messages
-            (room, sender, note, mime_type, audio_blob, audio_hash, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            room,
-            sender,
-            note.strip(),
-            mime_type or "audio/wav",
-            sqlite3.Binary(audio_bytes),
-            audio_hash,
-            created_at
-        ))
+    def action():
+        with get_conn() as conn:
+            conn.execute("""
+                INSERT INTO messages
+                (room, sender, note, mime_type, audio_blob, audio_hash, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                room,
+                sender,
+                note.strip(),
+                mime_type or "audio/wav",
+                sqlite3.Binary(audio_bytes),
+                audio_hash,
+                created_at
+            ))
 
-        # Simpan maksimal beberapa pesan terbaru per room agar database tidak membesar terus.
-        conn.execute("""
-            DELETE FROM messages
-            WHERE room = ?
-            AND id NOT IN (
-                SELECT id FROM messages
+            conn.execute("""
+                DELETE FROM messages
                 WHERE room = ?
-                ORDER BY id DESC
-                LIMIT ?
-            )
-        """, (room, room, MAX_MESSAGES_PER_ROOM))
+                AND id NOT IN (
+                    SELECT id FROM messages
+                    WHERE room = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+            """, (room, room, MAX_MESSAGES_PER_ROOM))
 
-        conn.commit()
+            conn.commit()
 
+    execute_with_retry(action)
     return True, "Pesan suara berhasil dikirim."
 
 
 def get_messages(room: str, limit: int):
-    with get_conn() as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT id, room, sender, note, mime_type, audio_blob, created_at
-            FROM messages
-            WHERE room = ?
-            ORDER BY id DESC
-            LIMIT ?
-        """, (room, limit)).fetchall()
+    def action():
+        with get_conn() as conn:
+            return conn.execute("""
+                SELECT id, room, sender, note, mime_type, audio_blob, created_at
+                FROM messages
+                WHERE room = ?
+                ORDER BY id DESC
+                LIMIT ?
+            """, (room, int(limit))).fetchall()
 
-    return rows
+    try:
+        return execute_with_retry(action)
+    except sqlite3.OperationalError as exc:
+        # Recovery otomatis jika database dari versi lama/korup masih menyebabkan error.
+        with get_conn() as conn:
+            columns = get_columns(conn, "messages")
+            if "filename" in columns and "audio_blob" not in columns:
+                migrate_old_file_schema_to_blob(conn, columns)
+            else:
+                reset_messages_table(conn)
+
+        st.warning(
+            "Database lama terdeteksi dan sudah diperbaiki otomatis. "
+            "Silakan lanjut gunakan aplikasi."
+        )
+        return []
 
 
 def delete_message(message_id: int, room: str):
-    with get_conn() as conn:
-        conn.execute(
-            "DELETE FROM messages WHERE id = ? AND room = ?",
-            (message_id, room)
-        )
-        conn.commit()
+    def action():
+        with get_conn() as conn:
+            conn.execute(
+                "DELETE FROM messages WHERE id = ? AND room = ?",
+                (message_id, room)
+            )
+            conn.commit()
+
+    execute_with_retry(action)
 
 
 def clear_room(room: str):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM messages WHERE room = ?", (room,))
-        conn.commit()
+    def action():
+        with get_conn() as conn:
+            conn.execute("DELETE FROM messages WHERE room = ?", (room,))
+            conn.commit()
+
+    execute_with_retry(action)
 
 
 # =========================================================
@@ -238,7 +411,7 @@ init_db()
 default_room = get_query_room()
 
 st.title("🎙️ Push To Talk Sederhana")
-st.caption("Versi stabil: rekam suara, kirim, lalu pengguna lain menerima setelah refresh/auto-refresh.")
+st.caption("Rekam suara, kirim, lalu pengguna lain menerima setelah refresh/auto-refresh.")
 
 with st.sidebar:
     st.header("Pengaturan")
@@ -319,7 +492,7 @@ st.subheader(f"Channel: #{room}")
 
 st.info(
     "Tekan tombol rekam, bicara, berhenti rekam, lalu klik **Kirim Pesan Suara**. "
-    "Ini bukan voice call real-time, tetapi voice message sederhana."
+    "Aplikasi ini bukan voice call real-time, tetapi voice message sederhana."
 )
 
 with st.form("send_voice_message", clear_on_submit=True):
