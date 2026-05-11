@@ -1239,6 +1239,6 @@ else:
             )
 
 st.caption(
-    "Catatan: pada Streamlit Community Cloud, penyimpanan lokal bisa reset saat aplikasi restart/redeploy. "
-    "Untuk produksi permanen, gunakan database/storage eksternal."
+    "Catatan: Room umum dapat dilihat dan didengar pesannya oleh siapapun yang masuk, jika membutuhkan link private silahkan hubungi admin. "
+    "Created by : Galuh Adi Insani"
 )
