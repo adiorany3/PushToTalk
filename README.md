@@ -1,4 +1,4 @@
-# Push To Talk Sederhana - Secret Room Admin CRUD
+# PTT Terminal - Hacker Theme
 
 Server:
 
@@ -27,6 +27,7 @@ https://pushtotalk.streamlit.app/
 14. Ada QR Code room.
 15. Ada migrasi otomatis dari schema database lama.
 16. Jika nama pengguna dikosongkan, sistem otomatis membuat nama unik seperti `User-A7K9Q2`.
+17. Tampilan sudah diubah menjadi **tema hacker terminal**: dark background, neon green, monospace UI, terminal banner, tombol bergaya console, dan QR code hijau-hitam.
 
 ## Daftar 5 Room Publik
 
@@ -139,3 +140,18 @@ User-A7K9Q2
 ```
 
 Nama otomatis disimpan pada sesi pengguna agar tidak berubah saat refresh. Sistem juga mengecek database agar nama otomatis tidak sama dengan nama otomatis lain dan tidak sama dengan nama yang sudah pernah muncul pada pesan.
+
+
+## Tema Hacker Terminal
+
+Versi ini memakai gaya antarmuka terminal:
+
+```text
+Background : hitam gelap
+Aksen      : neon green
+Font       : monospace / terminal
+Efek       : scanline, glow, terminal panel, tombol console
+QR Code    : hijau-hitam
+```
+
+Semua fungsi sebelumnya tetap dipertahankan, termasuk secret room, admin otomatis `adioranye`, pembatasan nama admin, retensi pesan publik 5, dan retensi pesan secret room 20.

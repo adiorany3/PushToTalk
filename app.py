@@ -813,7 +813,7 @@ def make_qr_png(data: str) -> bytes:
     qr = qrcode.QRCode(version=None, box_size=8, border=2)
     qr.add_data(data)
     qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
+    img = qr.make_image(fill_color="#00ff6a", back_color="#020804")
     buffer = BytesIO()
     img.save(buffer, format="PNG")
     return buffer.getvalue()
@@ -828,11 +828,16 @@ def copy_button_html(text: str, label: str = "Salin Link"):
             style="
                 width: 100%;
                 padding: 0.55rem 0.75rem;
-                border: 1px solid #ddd;
+                border: 1px solid #00ff6a;
                 border-radius: 0.5rem;
-                background: #fff;
+                background: #001b0b;
+                color: #00ff6a;
                 cursor: pointer;
-                font-weight: 600;
+                font-family: 'Courier New', monospace;
+                font-weight: 700;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                box-shadow: 0 0 14px rgba(0, 255, 106, 0.25);
             "
         >{label}</button>
         """,
@@ -848,10 +853,192 @@ def check_admin_password(input_password: str) -> bool:
     return input_password == get_admin_password()
 
 
+def inject_hacker_terminal_theme():
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+        :root {
+            --terminal-bg: #020804;
+            --terminal-panel: rgba(0, 24, 10, 0.92);
+            --terminal-panel-soft: rgba(0, 40, 18, 0.72);
+            --terminal-green: #00ff6a;
+            --terminal-green-soft: #33ff99;
+            --terminal-green-dim: #6aff9d;
+            --terminal-border: rgba(0, 255, 106, 0.45);
+            --terminal-red: #ff3b3b;
+            --terminal-yellow: #ffe066;
+        }
+
+        html, body, [class*="css"], .stApp {
+            font-family: 'Share Tech Mono', 'Courier New', monospace !important;
+        }
+
+        .stApp {
+            color: var(--terminal-green);
+            background:
+                linear-gradient(rgba(0, 255, 106, 0.035) 50%, rgba(0, 0, 0, 0.08) 50%),
+                radial-gradient(circle at top left, rgba(0, 255, 106, 0.18), transparent 32%),
+                radial-gradient(circle at bottom right, rgba(0, 255, 106, 0.10), transparent 34%),
+                var(--terminal-bg);
+            background-size: 100% 4px, auto, auto, auto;
+        }
+
+        .stApp::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 255, 106, 0.04),
+                rgba(0, 255, 106, 0.04) 1px,
+                transparent 1px,
+                transparent 4px
+            );
+            z-index: 9999;
+            mix-blend-mode: screen;
+        }
+
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            max-width: 920px;
+        }
+
+        section[data-testid="stSidebar"] {
+            background: #010502;
+            border-right: 1px solid var(--terminal-border);
+            box-shadow: 0 0 28px rgba(0, 255, 106, 0.12);
+        }
+
+        section[data-testid="stSidebar"] * {
+            color: var(--terminal-green) !important;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            color: var(--terminal-green) !important;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            text-shadow: 0 0 10px rgba(0, 255, 106, 0.65);
+        }
+
+        h1::before { content: ">_ "; }
+        h2::before, h3::before { content: "# "; color: var(--terminal-green-soft); }
+
+        p, label, span, div, small, code {
+            color: var(--terminal-green-dim);
+        }
+
+        [data-testid="stMarkdownContainer"] code,
+        pre,
+        code {
+            background: #000 !important;
+            color: var(--terminal-green) !important;
+            border: 1px solid var(--terminal-border);
+            border-radius: 8px;
+        }
+
+        [data-testid="stVerticalBlockBorderWrapper"],
+        [data-testid="stExpander"],
+        div[data-testid="stForm"],
+        div[data-testid="stAlert"] {
+            background: var(--terminal-panel) !important;
+            border: 1px solid var(--terminal-border) !important;
+            border-radius: 12px !important;
+            box-shadow: inset 0 0 24px rgba(0, 255, 106, 0.05), 0 0 22px rgba(0, 255, 106, 0.10);
+        }
+
+        div[data-testid="stAlert"] {
+            color: var(--terminal-green) !important;
+        }
+
+        input, textarea, select,
+        div[data-baseweb="input"] > div,
+        div[data-baseweb="select"] > div {
+            background: #000 !important;
+            color: var(--terminal-green) !important;
+            border-color: var(--terminal-border) !important;
+            border-radius: 8px !important;
+            box-shadow: 0 0 0 1px rgba(0, 255, 106, 0.2) inset;
+        }
+
+        input::placeholder, textarea::placeholder {
+            color: rgba(106, 255, 157, 0.55) !important;
+        }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        .stLinkButton > a,
+        button[kind="primary"],
+        button[kind="secondary"] {
+            background: #001b0b !important;
+            color: var(--terminal-green) !important;
+            border: 1px solid var(--terminal-green) !important;
+            border-radius: 8px !important;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            box-shadow: 0 0 12px rgba(0, 255, 106, 0.22);
+        }
+
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        .stLinkButton > a:hover,
+        button[kind="primary"]:hover,
+        button[kind="secondary"]:hover {
+            background: var(--terminal-green) !important;
+            color: #001b0b !important;
+            border-color: var(--terminal-green) !important;
+            box-shadow: 0 0 24px rgba(0, 255, 106, 0.55);
+        }
+
+        [data-testid="stSlider"] *,
+        [data-testid="stToggle"] *,
+        [data-testid="stRadio"] * {
+            color: var(--terminal-green) !important;
+        }
+
+        hr {
+            border-color: var(--terminal-border) !important;
+            box-shadow: 0 0 8px rgba(0, 255, 106, 0.3);
+        }
+
+        audio {
+            width: 100%;
+            filter: sepia(1) saturate(3) hue-rotate(70deg);
+        }
+
+        img {
+            border: 1px solid var(--terminal-border);
+            border-radius: 10px;
+            box-shadow: 0 0 16px rgba(0, 255, 106, 0.18);
+        }
+
+        [data-testid="stCaptionContainer"] {
+            color: rgba(106, 255, 157, 0.80) !important;
+        }
+
+        .terminal-banner {
+            border: 1px solid var(--terminal-border);
+            background: linear-gradient(90deg, rgba(0, 255, 106, 0.14), rgba(0, 0, 0, 0.2));
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+            color: var(--terminal-green);
+            box-shadow: 0 0 22px rgba(0, 255, 106, 0.12);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # =========================================================
 # APP
 # =========================================================
-st.set_page_config(page_title="PTT Sederhana", page_icon="🎙️", layout="centered")
+st.set_page_config(page_title="PTT Terminal", page_icon="🟢", layout="centered")
+inject_hacker_terminal_theme()
 
 init_db()
 trim_all_rooms()
@@ -860,11 +1047,12 @@ query_room = get_query_room_raw()
 query_is_public = query_room in PUBLIC_ROOMS
 query_is_secret = (not query_is_public) and secret_room_exists(query_room)
 
-st.title("🎙️ Push To Talk Sederhana")
-st.caption("Rekam suara, kirim, lalu pengguna lain menerima setelah refresh/auto-refresh.")
+st.title("PTT TERMINAL")
+st.caption("[ONLINE] Sistem komunikasi suara mode terminal. Rekam, kirim, lalu sinkronkan via refresh/auto-refresh.")
+st.markdown('<div class="terminal-banner">STATUS: SECURE VOICE CHANNEL ACTIVE // MODE: TERMINAL UI</div>', unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("Pengaturan")
+    st.header("Control Panel")
 
     if is_admin_authenticated():
         sender_input = ""
@@ -872,9 +1060,9 @@ with st.sidebar:
         st.caption(f"Nama admin otomatis: `{sender}`")
     else:
         sender_input = st.text_input(
-            "Nama pengguna",
+            "Username",
             value="",
-            placeholder="Kosongkan untuk nama otomatis unik",
+            placeholder="Kosongkan untuk auto-ID unik",
         )
         sender = get_sender_name_from_input(sender_input)
 
@@ -884,7 +1072,7 @@ with st.sidebar:
             st.caption(f"Nama otomatis Anda: `{sender}`")
 
     st.divider()
-    st.subheader("Masuk Room")
+    st.subheader("Room Access")
 
     default_mode_index = 1 if query_is_secret else 0
     room_mode = st.radio(
@@ -902,7 +1090,7 @@ with st.sidebar:
         public_default = query_room if query_room in PUBLIC_ROOMS else DEFAULT_ROOM
         public_index = public_keys.index(public_default)
         selected_public_room = st.selectbox(
-            "Pilih room publik",
+            "Pilih public channel",
             options=public_keys,
             index=public_index,
             format_func=lambda key: PUBLIC_ROOMS[key],
@@ -913,7 +1101,7 @@ with st.sidebar:
     else:
         default_secret_value = query_room if query_room not in PUBLIC_ROOMS else ""
         secret_input = st.text_input(
-            "Masukkan nama/kode secret room",
+            "Masukkan kode secret room",
             value=default_secret_value,
             placeholder="Contoh: operasi-alpha",
         )
@@ -924,16 +1112,16 @@ with st.sidebar:
             set_query_room(room)
 
         if not room:
-            st.info("Masukkan nama secret room yang diberikan admin.")
+            st.info("Masukkan kode secret room yang diberikan admin.")
         elif not active_room_valid:
             st.error("Secret room tidak ditemukan. Periksa kembali nama/kode room.")
         else:
-            st.success("Secret room ditemukan.")
+            st.success("Secret room ditemukan. Access granted.")
 
     st.divider()
     room_message_limit = get_room_message_limit(room) if active_room_valid else PUBLIC_MAX_MESSAGES_PER_ROOM
     limit = st.slider(
-        "Jumlah pesan tampil",
+        "Log pesan tampil",
         min_value=1,
         max_value=room_message_limit,
         value=room_message_limit,
@@ -945,76 +1133,76 @@ with st.sidebar:
     )
 
     auto_refresh = st.toggle(
-        "Auto-refresh pesan",
+        "Auto-sync pesan",
         value=True,
         help="Aktifkan agar pesan baru muncul otomatis.",
     )
     refresh_seconds = st.selectbox(
-        "Interval auto-refresh",
+        "Interval auto-sync",
         options=[3, 5, 10, 15, 30],
         index=1,
         disabled=not auto_refresh,
     )
 
     st.divider()
-    st.subheader("Room Publik")
+    st.subheader("Public Channels")
     for key, label in PUBLIC_ROOMS.items():
         st.write(f"- `{key}` — {label}")
 
     st.divider()
     if active_room_valid:
         room_url = make_room_url(room)
-        st.subheader("Bagikan Room Aktif")
+        st.subheader("Share Active Channel")
         st.code(room_url, language="text")
-        copy_button_html(room_url)
-        st.link_button("Buka Room Ini", room_url, use_container_width=True)
+        copy_button_html(room_url, label="Copy Link")
+        st.link_button("Open Channel", room_url, use_container_width=True)
         st.image(
             make_qr_png(room_url),
-            caption="Scan QR untuk masuk ke room ini",
+            caption="Scan QR untuk akses channel ini",
             use_container_width=True,
         )
     else:
-        st.subheader("Bagikan Room Aktif")
+        st.subheader("Share Active Channel")
         st.caption("Link dan QR muncul setelah room valid.")
 
     st.divider()
-    with st.expander("Admin room"):
+    with st.expander("Admin Terminal"):
         if not is_admin_authenticated():
             admin_password_input = st.text_input(
-                "Password admin",
+                "Admin password",
                 type="password",
-                placeholder="Masukkan password admin",
+                placeholder="Masukkan admin password",
             )
-            if st.button("Masuk Admin", use_container_width=True):
+            if st.button("Login Admin", use_container_width=True):
                 if check_admin_password(admin_password_input):
                     st.session_state["admin_authenticated"] = True
                     st.session_state["admin_sender"] = ADMIN_USERNAME
-                    st.success("Admin berhasil masuk.")
+                    st.success("Admin berhasil masuk. Root access granted.")
                     st.rerun()
                 else:
                     st.error("Password admin salah.")
         else:
-            st.success("Mode admin aktif.")
+            st.success("Mode admin aktif. Terminal unlocked.")
             st.caption(f"Login sebagai: `{ADMIN_USERNAME}`")
             st.caption(f"Pemilik/admin: {ADMIN_OWNER_NAME}")
-            if st.button("Keluar Admin", use_container_width=True):
+            if st.button("Logout Admin", use_container_width=True):
                 st.session_state["admin_authenticated"] = False
                 st.session_state.pop("admin_sender", None)
                 st.rerun()
 
             st.divider()
-            st.subheader("Buat Secret Room")
+            st.subheader("Create Secret Channel")
             with st.form("create_secret_room_form", clear_on_submit=True):
                 new_secret_name = st.text_input(
-                    "Nama/kode secret room baru",
+                    "Kode secret room baru",
                     placeholder="Contoh: operasi-alpha",
                 )
                 new_secret_label = st.text_input(
-                    "Nama tampilan opsional",
+                    "Label tampilan opsional",
                     placeholder="Contoh: Operasi Alpha",
                 )
                 create_submitted = st.form_submit_button(
-                    "Buat Secret Room",
+                    "Create Secret Room",
                     type="primary",
                     use_container_width=True,
                 )
@@ -1029,7 +1217,7 @@ with st.sidebar:
                         st.error(msg)
 
             st.divider()
-            st.subheader("List Semua Secret Room")
+            st.subheader("Secret Channel Registry")
             secret_rooms = get_secret_rooms()
 
             if not secret_rooms:
@@ -1105,9 +1293,9 @@ with st.sidebar:
                                 st.error(msg)
 
             st.divider()
-            st.subheader("Hapus Pesan")
+            st.subheader("Purge Message Logs")
             if active_room_valid:
-                if st.button("Hapus Semua Pesan Room Aktif", type="secondary", use_container_width=True):
+                if st.button("Purge Active Room Logs", type="secondary", use_container_width=True):
                     clear_room(room)
                     st.success(f"Semua pesan pada {get_room_label(room)} sudah dihapus.")
                     st.rerun()
@@ -1116,7 +1304,7 @@ with st.sidebar:
 
             confirm_all = st.checkbox("Saya paham: hapus semua pesan di semua room")
             if confirm_all:
-                if st.button("Hapus Semua Pesan Semua Room", type="secondary", use_container_width=True):
+                if st.button("Purge All Room Logs", type="secondary", use_container_width=True):
                     clear_all_rooms()
                     st.success("Semua pesan di semua room sudah dihapus.")
                     st.rerun()
@@ -1130,8 +1318,8 @@ elif auto_refresh and st_autorefresh is None:
     )
 
 if not active_room_valid:
-    st.subheader("Secret Room")
-    st.error("Room belum valid. Masukkan nama/kode secret room yang benar di sidebar.")
+    st.subheader("Secret Channel")
+    st.error("Room belum valid. Masukkan kode secret room yang benar di sidebar.")
     st.stop()
 
 active_room_message_limit = get_room_message_limit(room)
@@ -1140,27 +1328,27 @@ st.subheader(get_room_label(room))
 st.caption(f"Kode room: `{room}`")
 
 if room in PUBLIC_ROOMS:
-    st.info("Anda sedang berada di room publik.")
+    st.info("Anda sedang berada di public channel.")
 else:
-    st.success("Anda sedang berada di secret room. Hanya user yang tahu kode room ini yang dapat masuk.")
+    st.success("Anda sedang berada di secret channel. Hanya user yang tahu kode channel ini yang dapat masuk.")
 
 st.info(
-    f"Tekan tombol rekam, bicara, berhenti rekam, lalu klik **Kirim Pesan Suara**. "
-    f"Sistem menyimpan **{active_room_message_limit} pesan terbaru** untuk room ini. "
-    f"Pesan paling lama akan otomatis terhapus saat ada pesan baru."
+    f"Tekan tombol rekam, bicara, berhenti rekam, lalu klik **Transmit Voice Packet**. "
+    f"Sistem menyimpan **{active_room_message_limit} voice log terbaru** untuk channel ini. "
+    f"Log paling lama akan otomatis terhapus saat ada packet baru."
 )
 
 with st.form("send_voice_message", clear_on_submit=True):
     note = st.text_input(
-        "Catatan opsional",
+        "Catatan opsional / packet note",
         placeholder="Contoh: info lapangan, urgent, koordinasi...",
     )
-    audio_file = st.audio_input("Rekam pesan suara", sample_rate=16000)
-    submitted = st.form_submit_button("Kirim Pesan Suara", type="primary", use_container_width=True)
+    audio_file = st.audio_input("Record voice packet", sample_rate=16000)
+    submitted = st.form_submit_button("Transmit Voice Packet", type="primary", use_container_width=True)
 
     if submitted:
         if audio_file is None:
-            st.warning("Belum ada rekaman. Silakan rekam suara terlebih dahulu.")
+            st.warning("Belum ada rekaman. Rekam voice packet terlebih dahulu.")
         else:
             audio_bytes = audio_file.getvalue()
             mime_type = getattr(audio_file, "type", None) or "audio/wav"
@@ -1180,7 +1368,7 @@ with st.form("send_voice_message", clear_on_submit=True):
 
 col_a, col_b = st.columns([1, 1])
 with col_a:
-    if st.button("Refresh Sekarang", use_container_width=True):
+    if st.button("Sync Sekarang", use_container_width=True):
         st.rerun()
 with col_b:
     st.write(f"Room aktif: `{room}`")
@@ -1190,12 +1378,12 @@ with col_b:
         st.caption(f"Nama Anda: `{sender}`")
 
 st.divider()
-st.subheader(f"Pesan Terbaru Maksimal {active_room_message_limit}")
+st.subheader(f"Recent Voice Logs // Max {active_room_message_limit}")
 
 messages = get_messages(room, limit=limit)
 
 if not messages:
-    st.write("Belum ada pesan di room ini.")
+    st.write("Belum ada voice packet di channel ini.")
 else:
     for msg in messages:
         with st.container(border=True):
@@ -1206,7 +1394,7 @@ else:
             with top_right:
                 if is_admin_authenticated():
                     delete_clicked = st.button(
-                        "Hapus",
+                        "Purge",
                         key=f"delete_{msg['id']}",
                         use_container_width=True,
                     )
@@ -1220,8 +1408,8 @@ else:
             st.audio(bytes(msg["audio_blob"]), format=msg["mime_type"] or "audio/wav")
 
 footer_text = (
-    "Catatan: Room umum dapat dilihat dan didengar pesannya oleh siapapun yang masuk, "
-    "jika membutuhkan link private silahkan hubungi admin."
+    "Terminal note: public channel dapat dilihat dan didengar oleh siapapun yang masuk. "
+    "Untuk private channel, hubungi admin."
 )
 if is_admin_authenticated():
     footer_text += f" Created by: {ADMIN_OWNER_NAME}"
