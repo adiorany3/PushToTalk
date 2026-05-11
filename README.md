@@ -18,15 +18,15 @@ https://pushtotalk.streamlit.app/
 5. Admin dapat **menghapus** secret room.
 6. User biasa tidak melihat daftar secret room.
 7. User bisa masuk secret room dengan mengetik kode/nama secret room.
-8. Secret room juga bisa dibuka langsung melalui URL:
-   `https://pushtotalk.streamlit.app/?room=nama-secret-room`
-9. Pesan yang disimpan hanya **5 pesan terbaru per room**.
-10. Pesan paling lama otomatis dihapus saat ada pesan baru.
-11. Audio disimpan sebagai BLOB di SQLite.
-12. Ada auto-refresh.
-13. Ada QR Code room.
-14. Ada migrasi otomatis dari schema database lama.
-15. Jika nama pengguna dikosongkan, sistem otomatis membuat nama unik seperti `User-A7K9Q2`.
+8. Secret room juga bisa dibuka langsung melalui URL: `https://pushtotalk.streamlit.app/?room=nama-secret-room`
+9. Room publik menyimpan **5 pesan terbaru per room**.
+10. Secret room menyimpan **20 pesan terbaru per room**.
+11. Pesan paling lama otomatis dihapus saat ada pesan baru.
+12. Audio disimpan sebagai BLOB di SQLite.
+13. Ada auto-refresh.
+14. Ada QR Code room.
+15. Ada migrasi otomatis dari schema database lama.
+16. Jika nama pengguna dikosongkan, sistem otomatis membuat nama unik seperti `User-A7K9Q2`.
 
 ## Daftar 5 Room Publik
 
@@ -84,6 +84,7 @@ operasi-alpha
 ```
 
 User yang tahu kode tersebut dapat masuk melalui:
+
 - pilihan **Secret Room** di sidebar, lalu mengetik `operasi-alpha`; atau
 - URL langsung:
 
@@ -104,13 +105,14 @@ Jika kode room diubah, centang **Pindahkan pesan lama ke kode room baru** agar p
 
 ## Retensi Pesan
 
-Aplikasi hanya menyimpan:
+Aplikasi menyimpan:
 
 ```text
-5 pesan terbaru per room
+Room publik  : 5 pesan terbaru per room
+Secret room  : 20 pesan terbaru per room
 ```
 
-Saat pesan ke-6 dikirim pada room yang sama, pesan paling lama otomatis dihapus.
+Saat batas pesan terlampaui, pesan paling lama otomatis dihapus.
 
 ## Cara Deploy
 
@@ -127,7 +129,6 @@ app.py
 Folder `ptt_data/` tidak perlu di-upload ke GitHub.
 
 Pada Streamlit Community Cloud, penyimpanan lokal bisa reset saat aplikasi restart/redeploy. Untuk penggunaan permanen, gunakan database/storage eksternal seperti Supabase, PostgreSQL, Firebase, atau object storage.
-
 
 ## Nama Pengguna Otomatis
 
