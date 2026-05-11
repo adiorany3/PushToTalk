@@ -1,4 +1,4 @@
-# Push To Talk Sederhana - 5 Public Room + Secret Room Admin
+# Push To Talk Sederhana - Secret Room Admin CRUD
 
 Server:
 
@@ -10,17 +10,23 @@ https://pushtotalk.streamlit.app/
 
 1. Tetap ada 5 room publik.
 2. Admin dapat membuat secret room.
-3. Secret room tidak muncul untuk user biasa.
-4. User dapat masuk secret room dengan mengetik nama/kode secret room.
-5. Secret room juga bisa dibuka langsung melalui URL:
+3. Admin dapat melihat **list semua secret room**.
+4. Admin dapat **mengubah/modifikasi** secret room:
+   - mengubah kode room;
+   - mengubah nama tampilan;
+   - memilih apakah pesan lama dipindahkan ke kode room baru.
+5. Admin dapat **menghapus** secret room.
+6. User biasa tidak melihat daftar secret room.
+7. User bisa masuk secret room dengan mengetik kode/nama secret room.
+8. Secret room juga bisa dibuka langsung melalui URL:
    `https://pushtotalk.streamlit.app/?room=nama-secret-room`
-6. Tombol hapus pesan hanya muncul jika admin sudah login.
-7. Admin dapat menghapus secret room.
-8. Admin dapat menghapus pesan pada room aktif.
-9. Audio disimpan sebagai BLOB di SQLite.
-10. Ada auto-refresh.
-11. Ada QR Code room.
-12. Ada migrasi otomatis dari schema database lama.
+9. Pesan yang disimpan hanya **5 pesan terbaru per room**.
+10. Pesan paling lama otomatis dihapus saat ada pesan baru.
+11. Audio disimpan sebagai BLOB di SQLite.
+12. Ada auto-refresh.
+13. Ada QR Code room.
+14. Ada migrasi otomatis dari schema database lama.
+15. Jika nama pengguna dikosongkan, sistem otomatis membuat nama unik seperti `User-A7K9Q2`.
 
 ## Daftar 5 Room Publik
 
@@ -71,7 +77,7 @@ admin12345
 5. Klik **Buat Secret Room**.
 6. Bagikan kode room kepada user.
 
-Contoh:
+Contoh kode room:
 
 ```text
 operasi-alpha
@@ -84,6 +90,27 @@ User yang tahu kode tersebut dapat masuk melalui:
 ```text
 https://pushtotalk.streamlit.app/?room=operasi-alpha
 ```
+
+## Cara Admin Modifikasi Secret Room
+
+1. Login sebagai admin.
+2. Buka **List Semua Secret Room**.
+3. Pada secret room yang ingin diedit:
+   - ubah kode room; atau
+   - ubah nama tampilan.
+4. Klik **Simpan Perubahan**.
+
+Jika kode room diubah, centang **Pindahkan pesan lama ke kode room baru** agar pesan tetap ikut pindah.
+
+## Retensi Pesan
+
+Aplikasi hanya menyimpan:
+
+```text
+5 pesan terbaru per room
+```
+
+Saat pesan ke-6 dikirim pada room yang sama, pesan paling lama otomatis dihapus.
 
 ## Cara Deploy
 
@@ -100,3 +127,14 @@ app.py
 Folder `ptt_data/` tidak perlu di-upload ke GitHub.
 
 Pada Streamlit Community Cloud, penyimpanan lokal bisa reset saat aplikasi restart/redeploy. Untuk penggunaan permanen, gunakan database/storage eksternal seperti Supabase, PostgreSQL, Firebase, atau object storage.
+
+
+## Nama Pengguna Otomatis
+
+Jika kolom **Nama pengguna** dikosongkan, aplikasi otomatis membuat nama unik, misalnya:
+
+```text
+User-A7K9Q2
+```
+
+Nama otomatis disimpan pada sesi pengguna agar tidak berubah saat refresh. Sistem juga mengecek database agar nama otomatis tidak sama dengan nama otomatis lain dan tidak sama dengan nama yang sudah pernah muncul pada pesan.

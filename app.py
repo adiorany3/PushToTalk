@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import secrets
 import sqlite3
 import time
 from io import BytesIO
@@ -110,6 +111,13 @@ CREATE TABLE IF NOT EXISTS secret_rooms (
     label TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT
+)
+"""
+
+CREATE_AUTO_USERS_SQL = """
+CREATE TABLE IF NOT EXISTS auto_users (
+    alias TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
 )
 """
 
@@ -311,6 +319,8 @@ def trim_all_rooms():
 def init_db():
     with get_conn() as conn:
         ensure_secret_rooms_schema(conn)
+        conn.execute(CREATE_AUTO_USERS_SQL)
+        conn.commit()
 
         if not table_exists(conn, "messages"):
             conn.execute(CREATE_MESSAGES_SQL)
@@ -646,6 +656,99 @@ def clear_all_rooms():
     execute_with_retry(action)
 
 
+
+# =========================================================
+# NAMA PENGGUNA OTOMATIS
+# =========================================================
+
+def alias_exists(alias: str) -> bool:
+    alias = clean_name(alias, fallback="")
+
+    if not alias:
+        return False
+
+    def action():
+        with get_conn() as conn:
+            conn.execute(CREATE_AUTO_USERS_SQL)
+
+            row_auto = conn.execute(
+                "SELECT alias FROM auto_users WHERE alias = ?",
+                (alias,)
+            ).fetchone()
+
+            if row_auto:
+                return True
+
+            row_message = conn.execute(
+                "SELECT sender FROM messages WHERE sender = ? LIMIT 1",
+                (alias,)
+            ).fetchone()
+
+            return row_message is not None
+
+    return execute_with_retry(action)
+
+
+def create_unique_auto_username() -> str:
+    """
+    Membuat nama otomatis yang unik.
+    Disimpan di SQLite agar tidak sama dengan nama otomatis lain
+    dan tidak sama dengan nama yang pernah muncul di pesan.
+    """
+    def action():
+        with get_conn() as conn:
+            conn.execute(CREATE_AUTO_USERS_SQL)
+
+            for _ in range(100):
+                candidate = f"User-{secrets.token_hex(3).upper()}"
+
+                row_auto = conn.execute(
+                    "SELECT alias FROM auto_users WHERE alias = ?",
+                    (candidate,)
+                ).fetchone()
+
+                row_message = conn.execute(
+                    "SELECT sender FROM messages WHERE sender = ? LIMIT 1",
+                    (candidate,)
+                ).fetchone()
+
+                if row_auto is None and row_message is None:
+                    conn.execute(
+                        "INSERT INTO auto_users (alias, created_at) VALUES (?, ?)",
+                        (candidate, now_jakarta())
+                    )
+                    conn.commit()
+                    return candidate
+
+            # Fallback sangat jarang terjadi, tetapi tetap dibuat aman.
+            candidate = f"User-{int(time.time())}-{secrets.token_hex(2).upper()}"
+            conn.execute(
+                "INSERT OR IGNORE INTO auto_users (alias, created_at) VALUES (?, ?)",
+                (candidate, now_jakarta())
+            )
+            conn.commit()
+            return candidate
+
+    return execute_with_retry(action)
+
+
+def get_sender_name_from_input(raw_name: str) -> str:
+    """
+    Jika nama dikosongkan, sistem memberi nama otomatis unik.
+    Nama otomatis disimpan di session_state agar tidak berubah saat refresh.
+    """
+    raw_name = str(raw_name or "").strip()
+
+    if raw_name:
+        return clean_name(raw_name)
+
+    if "auto_username" not in st.session_state:
+        st.session_state["auto_username"] = create_unique_auto_username()
+
+    return st.session_state["auto_username"]
+
+
+
 # =========================================================
 # URL, QR, ADMIN
 # =========================================================
@@ -747,9 +850,16 @@ st.caption("Rekam suara, kirim, lalu pengguna lain menerima setelah refresh/auto
 with st.sidebar:
     st.header("Pengaturan")
 
-    sender = clean_name(
-        st.text_input("Nama pengguna", value="User")
+    sender_input = st.text_input(
+        "Nama pengguna",
+        value="",
+        placeholder="Kosongkan untuk nama otomatis unik"
     )
+
+    sender = get_sender_name_from_input(sender_input)
+
+    if not sender_input.strip():
+        st.caption(f"Nama otomatis Anda: `{sender}`")
 
     st.divider()
     st.subheader("Masuk Room")
