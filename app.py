@@ -1,16 +1,20 @@
 import hashlib
 import re
 import sqlite3
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import qrcode
 import streamlit as st
 
 
 # =========================
 # KONFIGURASI DASAR
 # =========================
+
+SERVER_URL = "https://pushtotalk.streamlit.app/"
 
 BASE_DIR = Path("ptt_data")
 AUDIO_DIR = BASE_DIR / "audio"
@@ -58,6 +62,26 @@ def clean_name(value: str, fallback: str = "Anonim") -> str:
 
 def now_jakarta() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def make_room_url(room: str) -> str:
+    base_url = SERVER_URL.rstrip("/")
+    return f"{base_url}/?room={room}"
+
+
+def make_qr_png(data: str) -> bytes:
+    qr = qrcode.QRCode(
+        version=None,
+        box_size=8,
+        border=2
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def save_message(room: str, sender: str, audio_bytes: bytes, mime_type: str, note: str = ""):
@@ -132,7 +156,6 @@ st.set_page_config(
 
 init_storage()
 
-# Ambil room dari query parameter jika ada
 query_room = st.query_params.get("room", "umum")
 default_room = safe_slug(query_room, fallback="umum")
 
@@ -149,9 +172,10 @@ with st.sidebar:
     room_input = st.text_input("Channel / Room", value=default_room)
     room = safe_slug(room_input, fallback="umum")
 
-    # Sinkronkan URL dengan room aktif
     if st.query_params.get("room") != room:
         st.query_params["room"] = room
+
+    room_url = make_room_url(room)
 
     limit = st.slider(
         "Jumlah pesan ditampilkan",
@@ -163,10 +187,20 @@ with st.sidebar:
 
     st.divider()
 
+    st.subheader("Bagikan Room")
     st.write("Link room:")
-    st.code(f"?room={room}", language="text")
+    st.code(room_url, language="text")
 
-    st.caption("Gunakan room yang sama agar beberapa pengguna masuk ke channel yang sama.")
+    st.link_button(
+        "Buka Room Ini",
+        room_url,
+        use_container_width=True
+    )
+
+    qr_png = make_qr_png(room_url)
+    st.image(qr_png, caption="Scan QR untuk masuk ke room ini")
+
+    st.caption("Gunakan link atau QR yang sama agar beberapa pengguna masuk ke channel yang sama.")
 
     st.divider()
 

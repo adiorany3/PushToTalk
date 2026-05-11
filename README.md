@@ -1,44 +1,70 @@
 # PTT Sederhana Streamlit
 
-Aplikasi push-to-talk sederhana berbasis voice message.
+Server publik yang dipakai:
 
-Aplikasi ini tidak memakai WebRTC, STUN, TURN, atau Mumble.  
-Pesan delay tidak masalah karena sistemnya berbasis rekam-kirim-putar.
+```text
+https://pushtotalk.streamlit.app/
+```
+
+Aplikasi ini adalah push-to-talk sederhana berbasis voice message.
+
+Tidak memakai WebRTC, STUN, TURN, atau Mumble.  
+Sistemnya berbasis rekam, kirim, lalu putar.
 
 ## Isi File
 
 - `app.py` — aplikasi utama Streamlit
 - `requirements.txt` — dependency Python
 - `README.md` — panduan singkat
+- `.gitignore` — file/folder yang tidak perlu di-upload ke GitHub
 
-## Cara Menjalankan Lokal
+## Fitur
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+- Rekam audio dari browser
+- Kirim pesan suara ke room/channel
+- Putar pesan suara terbaru
+- Link room otomatis memakai server:
+  `https://pushtotalk.streamlit.app/?room=umum`
+- QR Code untuk akses cepat dari HP
+- Room/channel sederhana via query parameter `?room=nama-room`
 
-## Cara Menjalankan agar Bisa Diakses dari HP Satu Jaringan
+## Cara Deploy ke Streamlit Community Cloud
 
-```bash
-streamlit run app.py --server.address 0.0.0.0 --server.port 8501
-```
-
-Lalu buka dari HP:
-
-```text
-http://IP-LAPTOP:8501
-```
-
-Contoh room/channel:
+1. Upload semua file ke GitHub.
+2. Buka Streamlit Community Cloud.
+3. Pilih repository.
+4. Set main file ke:
 
 ```text
-http://IP-LAPTOP:8501?room=umum
+app.py
 ```
 
-## Catatan
+5. Deploy.
 
-- Mikrofon biasanya hanya bisa dipakai di `localhost` atau website HTTPS.
-- Jika dibuka lewat IP lokal biasa, sebagian browser bisa memblokir akses mikrofon.
-- Untuk deployment online, gunakan Streamlit Community Cloud atau server dengan HTTPS.
-- Audio dan database tersimpan otomatis di folder `ptt_data`.
+## Contoh Link Room
+
+Room umum:
+
+```text
+https://pushtotalk.streamlit.app/?room=umum
+```
+
+Room tim:
+
+```text
+https://pushtotalk.streamlit.app/?room=tim
+```
+
+Room lapangan:
+
+```text
+https://pushtotalk.streamlit.app/?room=lapangan
+```
+
+## Catatan Penting
+
+- Karena server memakai HTTPS, akses mikrofon dari browser biasanya lebih aman dan lebih mudah diizinkan.
+- Penyimpanan audio memakai folder lokal `ptt_data`.
+- Di Streamlit Community Cloud, file lokal bisa hilang saat aplikasi restart/redeploy.
+- Aplikasi ini cocok untuk demo, komunikasi sederhana, atau prototipe.
+- Untuk produksi jangka panjang, sebaiknya gunakan database/storage eksternal.
