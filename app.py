@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import qrcode
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -29,7 +30,8 @@ DB_PATH = BASE_DIR / "ptt.sqlite3"
 
 TZ = ZoneInfo("Asia/Jakarta")
 
-MAX_MESSAGES_PER_ROOM = 200
+# HANYA SIMPAN 5 PESAN TERBARU PER ROOM
+MAX_MESSAGES_PER_ROOM = 5
 
 PUBLIC_ROOMS = {
     "umum": "Room 1 - Umum",
@@ -69,6 +71,12 @@ def safe_slug(value: str, fallback: str = DEFAULT_ROOM) -> str:
     return value[:40] or fallback
 
 
+def clean_label(value: str, fallback: str) -> str:
+    value = str(value or "").strip()
+    value = re.sub(r"[<>]", "", value)
+    return value[:60] or fallback
+
+
 def clean_name(value: str, fallback: str = "User") -> str:
     value = str(value or "").strip()
     value = re.sub(r"[<>]", "", value)
@@ -100,7 +108,8 @@ CREATE_SECRET_ROOMS_SQL = """
 CREATE TABLE IF NOT EXISTS secret_rooms (
     slug TEXT PRIMARY KEY,
     label TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    updated_at TEXT
 )
 """
 
@@ -171,6 +180,16 @@ def get_columns(conn, table_name: str) -> set:
         return set()
 
 
+def ensure_secret_rooms_schema(conn):
+    conn.execute(CREATE_SECRET_ROOMS_SQL)
+    columns = get_columns(conn, "secret_rooms")
+
+    if "updated_at" not in columns:
+        conn.execute("ALTER TABLE secret_rooms ADD COLUMN updated_at TEXT")
+
+    conn.commit()
+
+
 def reset_messages_table(conn):
     conn.execute("DROP TABLE IF EXISTS messages")
     conn.execute(CREATE_MESSAGES_SQL)
@@ -178,26 +197,29 @@ def reset_messages_table(conn):
     conn.commit()
 
 
-def normalize_room_for_migration(room_value: str) -> str:
+def register_secret_room_if_missing(conn, slug: str):
+    slug = safe_slug(slug, fallback="")
+    if not slug or slug in PUBLIC_ROOMS:
+        return
+
+    conn.execute("""
+        INSERT OR IGNORE INTO secret_rooms (slug, label, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+    """, (
+        slug,
+        f"Secret Room - {slug}",
+        now_jakarta(),
+        now_jakarta()
+    ))
+
+
+def normalize_room_for_migration(conn, room_value: str) -> str:
     slug = safe_slug(room_value, fallback=DEFAULT_ROOM)
 
     if slug in PUBLIC_ROOMS:
         return slug
 
-    # Data room lama yang bukan public tetap disimpan sebagai secret room otomatis.
-    try:
-        with get_conn() as conn:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO secret_rooms (slug, label, created_at)
-                VALUES (?, ?, ?)
-                """,
-                (slug, f"Secret - {slug}", now_jakarta())
-            )
-            conn.commit()
-    except Exception:
-        pass
-
+    register_secret_room_if_missing(conn, slug)
     return slug
 
 
@@ -225,7 +247,7 @@ def migrate_old_file_schema_to_blob(conn, old_columns: set):
             """).fetchall()
 
             for row in old_rows:
-                old_room = normalize_room_for_migration(row["room"] or DEFAULT_ROOM)
+                old_room = normalize_room_for_migration(conn, row["room"] or DEFAULT_ROOM)
                 audio_path = AUDIO_DIR / str(row["filename"])
 
                 if not audio_path.exists():
@@ -259,9 +281,36 @@ def migrate_old_file_schema_to_blob(conn, old_columns: set):
     conn.commit()
 
 
+def trim_room_messages(conn, room: str):
+    room = safe_slug(room)
+    conn.execute("""
+        DELETE FROM messages
+        WHERE room = ?
+        AND id NOT IN (
+            SELECT id FROM messages
+            WHERE room = ?
+            ORDER BY id DESC
+            LIMIT ?
+        )
+    """, (room, room, MAX_MESSAGES_PER_ROOM))
+
+
+def trim_all_rooms():
+    def action():
+        with get_conn() as conn:
+            room_rows = conn.execute("SELECT DISTINCT room FROM messages").fetchall()
+
+            for row in room_rows:
+                trim_room_messages(conn, row["room"])
+
+            conn.commit()
+
+    execute_with_retry(action)
+
+
 def init_db():
     with get_conn() as conn:
-        conn.execute(CREATE_SECRET_ROOMS_SQL)
+        ensure_secret_rooms_schema(conn)
 
         if not table_exists(conn, "messages"):
             conn.execute(CREATE_MESSAGES_SQL)
@@ -300,22 +349,32 @@ def init_db():
 def get_secret_rooms():
     def action():
         with get_conn() as conn:
-            conn.execute(CREATE_SECRET_ROOMS_SQL)
+            ensure_secret_rooms_schema(conn)
             return conn.execute("""
-                SELECT slug, label, created_at
-                FROM secret_rooms
-                ORDER BY created_at DESC, slug ASC
+                SELECT
+                    sr.slug,
+                    sr.label,
+                    sr.created_at,
+                    sr.updated_at,
+                    COALESCE(COUNT(m.id), 0) AS message_count
+                FROM secret_rooms sr
+                LEFT JOIN messages m ON m.room = sr.slug
+                GROUP BY sr.slug, sr.label, sr.created_at, sr.updated_at
+                ORDER BY sr.created_at DESC, sr.slug ASC
             """).fetchall()
 
     return execute_with_retry(action)
 
 
 def secret_room_exists(slug: str) -> bool:
-    slug = safe_slug(slug)
+    slug = safe_slug(slug, fallback="")
+
+    if not slug:
+        return False
 
     def action():
         with get_conn() as conn:
-            conn.execute(CREATE_SECRET_ROOMS_SQL)
+            ensure_secret_rooms_schema(conn)
             row = conn.execute(
                 "SELECT slug FROM secret_rooms WHERE slug = ?",
                 (slug,)
@@ -330,7 +389,7 @@ def get_secret_room_label(slug: str) -> str:
 
     def action():
         with get_conn() as conn:
-            conn.execute(CREATE_SECRET_ROOMS_SQL)
+            ensure_secret_rooms_schema(conn)
             row = conn.execute(
                 "SELECT label FROM secret_rooms WHERE slug = ?",
                 (slug,)
@@ -349,12 +408,11 @@ def create_secret_room(name: str, label: str = ""):
     if slug in PUBLIC_ROOMS:
         return False, "Nama tersebut sudah dipakai oleh room publik. Gunakan nama lain."
 
-    display_label = (label or "").strip() or f"Secret Room - {slug}"
-    display_label = re.sub(r"[<>]", "", display_label)[:60] or f"Secret Room - {slug}"
+    display_label = clean_label(label, fallback=f"Secret Room - {slug}")
 
     def action():
         with get_conn() as conn:
-            conn.execute(CREATE_SECRET_ROOMS_SQL)
+            ensure_secret_rooms_schema(conn)
             existing = conn.execute(
                 "SELECT slug FROM secret_rooms WHERE slug = ?",
                 (slug,)
@@ -364,9 +422,9 @@ def create_secret_room(name: str, label: str = ""):
                 return False, "Secret room sudah ada."
 
             conn.execute("""
-                INSERT INTO secret_rooms (slug, label, created_at)
-                VALUES (?, ?, ?)
-            """, (slug, display_label, now_jakarta()))
+                INSERT INTO secret_rooms (slug, label, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+            """, (slug, display_label, now_jakarta(), now_jakarta()))
             conn.commit()
 
             return True, f"Secret room `{slug}` berhasil dibuat."
@@ -374,15 +432,79 @@ def create_secret_room(name: str, label: str = ""):
     return execute_with_retry(action)
 
 
+def update_secret_room(old_slug: str, new_slug: str, new_label: str, move_messages: bool = True):
+    old_slug = safe_slug(old_slug, fallback="")
+    new_slug = safe_slug(new_slug, fallback="")
+    new_label = clean_label(new_label, fallback=f"Secret Room - {new_slug}")
+
+    if not old_slug:
+        return False, "Secret room lama tidak valid."
+
+    if not new_slug:
+        return False, "Kode secret room baru tidak boleh kosong."
+
+    if old_slug in PUBLIC_ROOMS or new_slug in PUBLIC_ROOMS:
+        return False, "Kode secret room tidak boleh sama dengan room publik."
+
+    def action():
+        with get_conn() as conn:
+            ensure_secret_rooms_schema(conn)
+
+            existing_old = conn.execute(
+                "SELECT slug FROM secret_rooms WHERE slug = ?",
+                (old_slug,)
+            ).fetchone()
+
+            if not existing_old:
+                return False, "Secret room tidak ditemukan."
+
+            if new_slug != old_slug:
+                existing_new = conn.execute(
+                    "SELECT slug FROM secret_rooms WHERE slug = ?",
+                    (new_slug,)
+                ).fetchone()
+
+                if existing_new:
+                    return False, "Kode secret room baru sudah dipakai."
+
+                conn.execute("""
+                    UPDATE secret_rooms
+                    SET slug = ?, label = ?, updated_at = ?
+                    WHERE slug = ?
+                """, (new_slug, new_label, now_jakarta(), old_slug))
+
+                if move_messages:
+                    conn.execute(
+                        "UPDATE messages SET room = ? WHERE room = ?",
+                        (new_slug, old_slug)
+                    )
+            else:
+                conn.execute("""
+                    UPDATE secret_rooms
+                    SET label = ?, updated_at = ?
+                    WHERE slug = ?
+                """, (new_label, now_jakarta(), old_slug))
+
+            trim_room_messages(conn, new_slug)
+            conn.commit()
+
+            return True, f"Secret room `{old_slug}` berhasil diperbarui menjadi `{new_slug}`."
+
+    return execute_with_retry(action)
+
+
 def delete_secret_room(slug: str, delete_messages: bool = True):
-    slug = safe_slug(slug)
+    slug = safe_slug(slug, fallback="")
+
+    if not slug:
+        return False, "Secret room tidak valid."
 
     if slug in PUBLIC_ROOMS:
         return False, "Room publik tidak dapat dihapus dari menu secret room."
 
     def action():
         with get_conn() as conn:
-            conn.execute(CREATE_SECRET_ROOMS_SQL)
+            ensure_secret_rooms_schema(conn)
             conn.execute("DELETE FROM secret_rooms WHERE slug = ?", (slug,))
 
             if delete_messages:
@@ -395,7 +517,7 @@ def delete_secret_room(slug: str, delete_messages: bool = True):
 
 
 def is_valid_room(slug: str) -> bool:
-    slug = safe_slug(slug)
+    slug = safe_slug(slug, fallback="")
     return slug in PUBLIC_ROOMS or secret_room_exists(slug)
 
 
@@ -443,21 +565,14 @@ def save_message(room: str, sender: str, note: str, audio_bytes: bytes, mime_typ
                 created_at
             ))
 
-            conn.execute("""
-                DELETE FROM messages
-                WHERE room = ?
-                AND id NOT IN (
-                    SELECT id FROM messages
-                    WHERE room = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                )
-            """, (room, room, MAX_MESSAGES_PER_ROOM))
+            # Setelah pesan baru masuk, langsung hapus pesan lama.
+            # Yang disimpan hanya 5 pesan terbaru pada room tersebut.
+            trim_room_messages(conn, room)
 
             conn.commit()
 
     execute_with_retry(action)
-    return True, "Pesan suara berhasil dikirim."
+    return True, "Pesan suara berhasil dikirim. Pesan lama otomatis dibatasi maksimal 5 pesan."
 
 
 def get_messages(room: str, limit: int):
@@ -468,13 +583,17 @@ def get_messages(room: str, limit: int):
 
     def action():
         with get_conn() as conn:
+            # Pastikan saat halaman dibuka pun jumlah pesan tetap maksimal 5.
+            trim_room_messages(conn, room)
+            conn.commit()
+
             return conn.execute("""
                 SELECT id, room, sender, note, mime_type, audio_blob, created_at
                 FROM messages
                 WHERE room = ?
                 ORDER BY id DESC
                 LIMIT ?
-            """, (room, int(limit))).fetchall()
+            """, (room, min(int(limit), MAX_MESSAGES_PER_ROOM))).fetchall()
 
     try:
         return execute_with_retry(action)
@@ -573,7 +692,7 @@ def make_qr_png(data: str) -> bytes:
 def copy_button_html(text: str, label: str = "Salin Link"):
     safe_text = text.replace("\\", "\\\\").replace("`", "\\`")
 
-    st.components.v1.html(
+    components.html(
         f"""
         <button
             onclick="navigator.clipboard.writeText(`{safe_text}`).then(() => {{
@@ -616,6 +735,7 @@ st.set_page_config(
 )
 
 init_db()
+trim_all_rooms()
 
 query_room = get_query_room_raw()
 query_is_public = query_room in PUBLIC_ROOMS
@@ -684,12 +804,14 @@ with st.sidebar:
 
     st.divider()
 
+    # Pesan tetap maksimal 5. Slider hanya untuk tampilan, dibatasi 5.
     limit = st.slider(
         "Jumlah pesan tampil",
-        min_value=5,
-        max_value=100,
-        value=30,
-        step=5
+        min_value=1,
+        max_value=MAX_MESSAGES_PER_ROOM,
+        value=MAX_MESSAGES_PER_ROOM,
+        step=1,
+        help="Sistem hanya menyimpan maksimal 5 pesan terbaru per room."
     )
 
     auto_refresh = st.toggle(
@@ -763,17 +885,24 @@ with st.sidebar:
             st.divider()
             st.subheader("Buat Secret Room")
 
-            new_secret_name = st.text_input(
-                "Nama/kode secret room baru",
-                placeholder="Contoh: operasi-alpha"
-            )
+            with st.form("create_secret_room_form", clear_on_submit=True):
+                new_secret_name = st.text_input(
+                    "Nama/kode secret room baru",
+                    placeholder="Contoh: operasi-alpha"
+                )
 
-            new_secret_label = st.text_input(
-                "Nama tampilan opsional",
-                placeholder="Contoh: Operasi Alpha"
-            )
+                new_secret_label = st.text_input(
+                    "Nama tampilan opsional",
+                    placeholder="Contoh: Operasi Alpha"
+                )
 
-            if st.button("Buat Secret Room", type="primary", use_container_width=True):
+                create_submitted = st.form_submit_button(
+                    "Buat Secret Room",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            if create_submitted:
                 ok, msg = create_secret_room(new_secret_name, new_secret_label)
                 if ok:
                     st.success(msg)
@@ -783,7 +912,7 @@ with st.sidebar:
                     st.error(msg)
 
             st.divider()
-            st.subheader("Daftar Secret Room")
+            st.subheader("List Semua Secret Room")
 
             secret_rooms = get_secret_rooms()
 
@@ -793,12 +922,55 @@ with st.sidebar:
                 for sr in secret_rooms:
                     sr_slug = sr["slug"]
                     sr_url = make_room_url(sr_slug)
+                    message_count = int(sr["message_count"] or 0)
 
                     with st.container(border=True):
                         st.markdown(f"**{sr['label']}**")
-                        st.code(sr_slug, language="text")
+                        st.write(f"Kode: `{sr_slug}`")
                         st.caption(f"Dibuat: {sr['created_at']}")
+                        if sr["updated_at"]:
+                            st.caption(f"Update terakhir: {sr['updated_at']}")
+                        st.caption(f"Jumlah pesan tersimpan: {message_count}/{MAX_MESSAGES_PER_ROOM}")
+
                         st.code(sr_url, language="text")
+
+                        with st.form(f"edit_secret_room_{sr_slug}"):
+                            edited_slug = st.text_input(
+                                "Ubah kode secret room",
+                                value=sr_slug,
+                                key=f"edit_slug_{sr_slug}"
+                            )
+
+                            edited_label = st.text_input(
+                                "Ubah nama tampilan",
+                                value=sr["label"],
+                                key=f"edit_label_{sr_slug}"
+                            )
+
+                            move_messages = st.checkbox(
+                                "Pindahkan pesan lama ke kode room baru",
+                                value=True,
+                                key=f"move_messages_{sr_slug}"
+                            )
+
+                            edit_submitted = st.form_submit_button(
+                                "Simpan Perubahan",
+                                use_container_width=True
+                            )
+
+                        if edit_submitted:
+                            ok, msg = update_secret_room(
+                                old_slug=sr_slug,
+                                new_slug=edited_slug,
+                                new_label=edited_label,
+                                move_messages=move_messages
+                            )
+
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
                         delete_sr_messages = st.checkbox(
                             "Hapus juga semua pesan room ini",
@@ -809,6 +981,7 @@ with st.sidebar:
                         if st.button(
                             "Hapus Secret Room",
                             key=f"delete_secret_room_{sr_slug}",
+                            type="secondary",
                             use_container_width=True
                         ):
                             ok, msg = delete_secret_room(
@@ -865,8 +1038,9 @@ else:
     st.success("Anda sedang berada di secret room. Hanya user yang tahu kode room ini yang dapat masuk.")
 
 st.info(
-    "Tekan tombol rekam, bicara, berhenti rekam, lalu klik **Kirim Pesan Suara**. "
-    "Aplikasi ini bukan voice call real-time, tetapi voice message sederhana."
+    f"Tekan tombol rekam, bicara, berhenti rekam, lalu klik **Kirim Pesan Suara**. "
+    f"Sistem hanya menyimpan **{MAX_MESSAGES_PER_ROOM} pesan terbaru** per room. "
+    f"Pesan paling lama akan otomatis terhapus saat ada pesan baru."
 )
 
 with st.form("send_voice_message", clear_on_submit=True):
@@ -918,7 +1092,7 @@ with col_b:
     st.write(f"Room aktif: `{room}`")
 
 st.divider()
-st.subheader("Pesan Terbaru")
+st.subheader(f"Pesan Terbaru Maksimal {MAX_MESSAGES_PER_ROOM}")
 
 messages = get_messages(room, limit=limit)
 
