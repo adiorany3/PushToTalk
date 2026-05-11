@@ -1037,7 +1037,7 @@ def inject_hacker_terminal_theme():
 # =========================================================
 # APP
 # =========================================================
-st.set_page_config(page_title="PTT Terminal", page_icon="🟢", layout="centered")
+st.set_page_config(page_title="./PTT_Terminal", page_icon="🟢", layout="centered")
 inject_hacker_terminal_theme()
 
 init_db()
